@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/components/casespanel.tsx","./src/components/metriccard.tsx","./src/components/nepalmap.tsx","./src/components/querypanel.tsx","./src/lib/regions.ts"],"version":"5.9.3"}
