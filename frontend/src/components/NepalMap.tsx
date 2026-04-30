@@ -1,4 +1,6 @@
-import { geoMercator, geoPath } from 'd3-geo';
+import { useEffect, useRef, useMemo } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { toCanonicalProvinceName } from '../lib/regions';
 import type { GeoFeatureCollection, HeatmapRegion } from '../types';
 
@@ -10,56 +12,144 @@ type Props = {
 };
 
 const COLOR_MAP: Record<HeatmapRegion['intensity'], string> = {
-  Low: '#f5d76e',
+  Low:    '#f5d76e',
   Medium: '#f59e0b',
-  High: '#ef4444',
+  High:   '#ef4444',
 };
+const SELECTED_COLOR = '#0f766e';
 
 export function NepalMap({ geojson, regions, selectedRegion, onSelectRegion }: Props) {
-  if (!geojson) {
-    return (
-      <section className="panel map-panel">
-        <div className="panel-heading">Nepal heatmap</div>
-        <div className="empty-state">Loading map geometry...</div>
-      </section>
-    );
-  }
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef      = useRef<L.Map | null>(null);
+  const layerRef    = useRef<L.GeoJSON | null>(null);
+  // Keep latest callback without triggering re-renders
+  const onSelectRef = useRef(onSelectRegion);
+  onSelectRef.current = onSelectRegion;
 
-  const projection = geoMercator().fitSize([720, 480], geojson as never);
-  const path = geoPath(projection);
-  const counts = new Map(regions.map((item) => [item.region, item]));
+  const counts = useMemo(
+    () => new Map(regions.map((r) => [r.region, r])),
+    [regions]
+  );
 
+  // ── ONE effect that owns the full Leaflet lifecycle ──────────────────────
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    // ── Init map (Strict-Mode-safe: check if Leaflet already owns the node) ──
+    // React Strict Mode mounts → unmounts → remounts. After the first cleanup,
+    // L.map() has already been called and left `_leaflet_id` on the element,
+    // so calling it again would throw. We detect this and reuse the container.
+    const alreadyHasLeaflet = !!(el as any)._leaflet_id;
+    if (!mapRef.current && !alreadyHasLeaflet) {
+      const map = L.map(el, {
+        center: [28.3, 84.1],
+        zoom: 7,
+        zoomControl: true,
+        scrollWheelZoom: true,
+        attributionControl: false,
+      });
+
+      L.tileLayer(
+        'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png',
+        { maxZoom: 12, minZoom: 5 }
+      ).addTo(map);
+
+      mapRef.current = map;
+    }
+
+    const map = mapRef.current;
+
+    // ── Remove old province layer ───────────────────────────────────
+    if (layerRef.current) {
+      map.removeLayer(layerRef.current);
+      layerRef.current = null;
+    }
+
+    // ── Add new province layer (only if geojson is ready) ──────────
+    if (geojson) {
+      const geoLayer = L.geoJSON(geojson as any, {
+        style: (feature) => {
+          const props     = feature?.properties as any;
+          const rawName   = props?.PR_NAME ?? props?.shapeName ?? props?.name ?? '';
+          const canonical = toCanonicalProvinceName(rawName);
+          const data      = counts.get(canonical);
+          const intensity = data?.intensity ?? 'Low';
+          const isSel     = selectedRegion === canonical;
+          return {
+            fillColor:   isSel ? SELECTED_COLOR : COLOR_MAP[intensity],
+            fillOpacity: isSel ? 0.85 : 0.65,
+            color:  '#1a2e35',
+            weight: isSel ? 2.5 : 1,
+            opacity: 1,
+          };
+        },
+        onEachFeature: (feature, layer) => {
+          const props     = feature.properties as any;
+          const rawName   = props?.PR_NAME ?? props?.shapeName ?? props?.name ?? '';
+          const canonical = toCanonicalProvinceName(rawName);
+          const data      = counts.get(canonical);
+
+          layer.bindTooltip(
+            `<div style="font-family:system-ui,sans-serif;padding:2px 4px;">
+               <b style="color:#1a2e35;">${canonical}</b><br/>
+               <span style="font-size:11px;color:#64748b;">
+                 Cases: ${data?.count ?? 0} · Intensity: ${data?.intensity ?? 'N/A'}
+               </span>
+             </div>`,
+            { sticky: true, direction: 'top', className: 'province-tooltip' }
+          );
+
+          layer.on('mouseover', () => {
+            (layer as L.Path).setStyle({ weight: 2.5, fillOpacity: 0.9 });
+            (layer as any).bringToFront();
+          });
+          layer.on('mouseout', () => geoLayer.resetStyle(layer));
+          layer.on('click',    () => onSelectRef.current(canonical));
+        },
+      });
+
+      geoLayer.addTo(map);
+      layerRef.current = geoLayer;
+
+      try {
+        map.fitBounds(geoLayer.getBounds(), { padding: [16, 16] });
+      } catch (_) { /* ignore empty-bounds errors */ }
+    }
+
+    // ── Cleanup ────────────────────────────────────────────────────────
+    // We intentionally do NOT destroy the Leaflet map here because in
+    // React Strict Mode the cleanup fires between two consecutive mounts
+    // of the same component — destroying and re-creating is wasteful and
+    // causes Leaflet to throw on second L.map() call. The map is destroyed
+    // only when the whole <NepalMap> component tree is removed from the DOM.
+    return () => {
+      // Only remove the GeoJSON overlay, leave the base map alive
+      if (layerRef.current && mapRef.current) {
+        mapRef.current.removeLayer(layerRef.current);
+        layerRef.current = null;
+      }
+    };
+    // Re-run whenever the data that controls rendering changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geojson, counts, selectedRegion]);
+
+  // ── Render ────────────────────────────────────────────────────────
   return (
     <section className="panel map-panel">
       <div className="panel-heading">Nepal heatmap</div>
-      <svg viewBox="0 0 720 480" className="map-svg" role="img" aria-label="Nepal heatmap">
-        <defs>
-          <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
-            <feDropShadow dx="0" dy="8" stdDeviation="10" floodOpacity="0.18" />
-          </filter>
-        </defs>
-        {geojson.features.map((feature) => {
-          const rawRegionName = feature.properties.shapeName ?? feature.properties.name ?? '';
-          const regionName = toCanonicalProvinceName(rawRegionName);
-          const regionData = counts.get(regionName);
-          const intensity = regionData?.intensity ?? 'Low';
-          const isSelected = selectedRegion === regionName;
-          const pathData = path(feature as never) ?? '';
-          return (
-            <path
-              key={rawRegionName || regionName}
-              d={pathData}
-              onClick={() => onSelectRegion(regionName)}
-              className={`province-path province-${intensity.toLowerCase()} ${isSelected ? 'province-selected' : ''}`}
-              style={{ fill: COLOR_MAP[intensity] }}
-            />
-          );
-        })}
-      </svg>
+
+      {!geojson ? (
+        <div className="empty-state">Loading map geometry…</div>
+      ) : (
+        <div ref={containerRef} className="leaflet-container-wrapper" />
+      )}
+
       <div className="legend-row">
-        <LegendItem color={COLOR_MAP.Low} label="Low" />
+        <LegendItem color={COLOR_MAP.Low}    label="Low" />
         <LegendItem color={COLOR_MAP.Medium} label="Medium" />
-        <LegendItem color={COLOR_MAP.High} label="High" />
+        <LegendItem color={COLOR_MAP.High}   label="High" />
+        <LegendItem color={SELECTED_COLOR}   label="Selected" />
       </div>
     </section>
   );

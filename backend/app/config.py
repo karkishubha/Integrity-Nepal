@@ -10,7 +10,8 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 DATASET_PATH = BASE_DIR / "nepal_governance_complaints_2026.csv"
 GEOJSON_PATH = Path(__file__).resolve().parent / "data" / "nepal_provinces.geojson"
 
-load_dotenv(BASE_DIR / ".env", override=False)
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BACKEND_DIR / ".env", override=False)
 
 API_ORIGINS = [
     "http://localhost:5173",

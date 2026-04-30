@@ -171,7 +171,7 @@ export default function App() {
 
         <div className="panel filter-panel">
           <div className="panel-heading">Filters</div>
-          <div className="space-y-4">
+          <div className="filter-group">
             <FilterDropdown
               label="Province"
               value={provinceFilter}
