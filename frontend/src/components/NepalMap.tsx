@@ -59,6 +59,7 @@ export function NepalMap({ geojson, regions, selectedRegion, onSelectRegion }: P
     }
 
     const map = mapRef.current;
+    if (!map) return;
 
     // ── Remove old province layer ───────────────────────────────────
     if (layerRef.current) {

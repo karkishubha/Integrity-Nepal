@@ -161,10 +161,20 @@ def structure_complaint(text: str) -> ComplaintStructure:
             {
                 "role": "system",
                 "content": (
-                    "You extract structured governance intelligence from complaint text. "
+                    "You extract structured governance intelligence from Nepal complaint text. "
                     "Return JSON only with keys: corruption_type, region, department, severity, summary. "
-                    "Use the allowed corruption_type values Bribery, Delay, Fraud, Abuse of Power, Other. "
-                    "Use severity values Low, Medium, High. If uncertain, return null for region or department."
+                    "Use allowed corruption_type values: Bribery, Delay, Fraud, Abuse of Power, Other. "
+                    "Use severity values: Low, Medium, High. "
+                    "Valid regions are: Koshi Province, Madhesh Province, Bagmati Province, Gandaki Province, Lumbini Province, Karnali Province, Sudurpashchim Province. "
+                    "For region: Look for explicit province/district names. If not found, infer from context clues like: "
+                    "Kathmandu/Lalitpur/Bhaktapur/Nuwakot/Dhading/Chitwan/Kavrepalanchok/Sindhupalchok → Bagmati Province; "
+                    "Pokhara/Kaski/Tanahun/Syangja/Lamjung/Mustang → Gandaki Province; "
+                    "Butwal/Rupandehi/Banke/Nepalgunj/Kapilvastu/Dang → Lumbini Province; "
+                    "Surkhet/Dailekh/Jumla/Salyan/Dolpa/Humla → Karnali Province; "
+                    "Doti/Dadeldhura/Kailali/Kanchanpur/Baitadi/Bajhang → Sudurpashchim Province; "
+                    "Sunsari/Morang/Jhapa/Itahari/Biratnagar → Koshi Province; "
+                    "Sarlahi/Dhanusha/Siraha/Rautahat/Bara/Parsa → Madhesh Province. "
+                    "Return null for region or department only if truly impossible to infer."
                 ),
             },
             {"role": "user", "content": clipped},
@@ -228,7 +238,11 @@ def heuristic_query_plan(query: str) -> QueryPlan:
     if task == "aggregate" and group_by is None:
         group_by = "region"
 
-    return QueryPlan(task=task, filter=filter_payload, group_by=group_by, limit=10, sort_desc=True)
+    # Detect if query asks for lowest/least/minimum instead of highest/most/maximum
+    least_markers = ["least", "lowest", "fewest", "minimum", "smallest", "least cases", "least complaints"]
+    sort_desc = not any(marker in lowered for marker in least_markers)
+
+    return QueryPlan(task=task, filter=filter_payload, group_by=group_by, limit=10, sort_desc=sort_desc)
 
 
 def interpret_query(query: str) -> QueryPlan:
@@ -241,6 +255,7 @@ def interpret_query(query: str) -> QueryPlan:
                     "Convert a governance analysis question into a JSON query plan. "
                     "Return JSON only with keys: task, filter, group_by, limit, sort_desc. "
                     "task must be aggregate or list. filter is an object. group_by may be region, department, corruption_type, severity, or null. "
+                    "sort_desc should be true for highest/most/maximum/top queries, false for least/lowest/minimum/fewest queries. "
                     "Never invent fields outside the schema."
                 ),
             },
@@ -282,7 +297,9 @@ def _default_query_answer(query_text: str, plan: QueryPlan, grouped_rows: list[d
         top_row = grouped_rows[0]
         region = str(top_row.get("region", "the selected region"))
         count = int(top_row.get("count", 0))
-        answer = f"{region} has the highest {corruption_type.lower()} cases with {count} complaints."
+        # Use "highest" or "least" based on sort_desc flag
+        extremum = "highest" if plan.sort_desc else "least"
+        answer = f"{region} has the {extremum} {corruption_type.lower()} cases with {count} complaints."
         visual_note = f"The visuals below are focused on {region}."
         return {"answer": answer, "visual_note": visual_note, "focus_region": focus_region or region}
 
