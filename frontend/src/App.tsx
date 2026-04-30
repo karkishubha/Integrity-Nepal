@@ -3,8 +3,10 @@ import { CasesPanel } from './components/CasesPanel';
 import { MetricCard } from './components/MetricCard';
 import { NepalMap } from './components/NepalMap';
 import { QueryPanel } from './components/QueryPanel';
+import { FilterDropdown } from './components/FilterDropdown';
 import type { ComplaintCase, GeoFeatureCollection, HeatmapRegion, QueryResult, SummaryResponse } from './types';
 import { fetchHeatmapData, fetchNepalGeojson, fetchRegionCases, fetchSummary, runQuery } from './api';
+import { toCanonicalProvinceName } from './lib/regions';
 
 const EMPTY_SUMMARY: SummaryResponse = {
   total_cases: 0,
@@ -26,12 +28,16 @@ export default function App() {
   const [geojson, setGeojson] = useState<GeoFeatureCollection | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<string | null>(null);
   const [regionCases, setRegionCases] = useState<ComplaintCase[]>([]);
+  const [allRegionCases, setAllRegionCases] = useState<ComplaintCase[]>([]);
   const [regionCaseCount, setRegionCaseCount] = useState(0);
+  const [provinceFilter, setProvinceFilter] = useState('All provinces');
+  const [categoryFilter, setCategoryFilter] = useState('All types');
   const [query, setQuery] = useState('Which region has the highest bribery cases?');
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [status, setStatus] = useState('Loading intelligence layer...');
+  const [logoVisible, setLogoVisible] = useState(true);
 
   useEffect(() => {
     async function loadInitialData() {
@@ -46,10 +52,7 @@ export default function App() {
         setGeojson(geojsonResponse);
         setStatus('Live dataset ready');
 
-        const firstHotRegion = heatmapResponse.regions.find((item) => item.count > 0)?.region;
-        if (firstHotRegion) {
-          await selectRegion(firstHotRegion);
-        }
+        // Do not auto-select a region on load; let the user pick from the filter
       } catch (error) {
         setStatus(error instanceof Error ? error.message : 'Failed to load data');
       }
@@ -60,16 +63,46 @@ export default function App() {
   }, []);
 
   async function selectRegion(region: string) {
-    setSelectedRegion(region);
+    const canonicalRegion = toCanonicalProvinceName(region);
+    setSelectedRegion(canonicalRegion);
+    console.log('Selecting region:', region, '-> canonical:', canonicalRegion);
     try {
-      const response = await fetchRegionCases(region);
-      setRegionCases(response.cases as ComplaintCase[]);
-      setRegionCaseCount(response.count);
-    } catch {
+      const response = await fetchRegionCases(canonicalRegion);
+      const cases = (response.cases || []) as ComplaintCase[];
+      console.log(`Fetched ${cases.length} cases for ${canonicalRegion}`);
+      setAllRegionCases(cases);
+      setRegionCaseCount(cases.length);
+      // Apply category filter immediately
+      if (categoryFilter === 'All types') {
+        setRegionCases(cases);
+      } else {
+        const filtered = cases.filter((c) => c.corruption_type === categoryFilter);
+        console.log(`Filtered to ${filtered.length} cases with type "${categoryFilter}"`);
+        setRegionCases(filtered);
+      }
+    } catch (error) {
+      console.error('Error fetching region cases for', canonicalRegion, ':', error);
+      setAllRegionCases([]);
       setRegionCases([]);
       setRegionCaseCount(0);
     }
   }
+
+  // Re-filter when category changes
+  useEffect(() => {
+    if (allRegionCases.length === 0) {
+      console.log('No cases available to filter');
+      return;
+    }
+    if (categoryFilter === 'All types') {
+      console.log('Showing all types:', allRegionCases.length, 'cases');
+      setRegionCases(allRegionCases);
+    } else {
+      const filtered = allRegionCases.filter((c) => c.corruption_type === categoryFilter);
+      console.log(`Filtered ${allRegionCases.length} cases to ${filtered.length} with type "${categoryFilter}"`);
+      setRegionCases(filtered);
+    }
+  }, [categoryFilter, allRegionCases]);
 
   async function handleQuery() {
     if (!query.trim()) {
@@ -111,7 +144,11 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand-block">
-          <div className="brand-mark">NIH</div>
+          {logoVisible ? (
+            <img src="/logo.jpeg" alt="Nepal Integrity Heatmap logo" className="brand-logo" onError={() => setLogoVisible(false)} />
+          ) : (
+            <div className="brand-mark">NIH</div>
+          )}
           <div>
             <div className="brand-title">Nepal Integrity Heatmap</div>
             <div className="brand-subtitle">AI-powered civic intelligence</div>
@@ -131,6 +168,39 @@ export default function App() {
         >
           Focus heatmap
         </button>
+
+        <div className="panel filter-panel">
+          <div className="panel-heading">Filters</div>
+          <div className="space-y-4">
+            <FilterDropdown
+              label="Province"
+              value={provinceFilter}
+              options={['All provinces', ...regions.map((r) => r.region)]}
+              onChange={(v) => {
+                console.log('Province filter changed to:', v);
+                setProvinceFilter(v);
+                if (v === 'All provinces') {
+                  setSelectedRegion(null);
+                  setAllRegionCases([]);
+                  setRegionCases([]);
+                  setRegionCaseCount(0);
+                } else {
+                  selectRegion(v);
+                }
+              }}
+            />
+
+            <FilterDropdown
+              label="Complaint Type"
+              value={categoryFilter}
+              options={['All types', ...summary.distribution_overview.by_corruption_type.map((t) => t.corruption_type)]}
+              onChange={(v) => {
+                console.log('Category filter changed to:', v);
+                setCategoryFilter(v);
+              }}
+            />
+          </div>
+        </div>
 
         <QueryPanel
           value={query}
@@ -162,8 +232,7 @@ export default function App() {
             <div className="eyebrow">Governance data intelligence platform</div>
             <h1>Corruption patterns across Nepal, explained with real complaint data.</h1>
             <p>
-              The backend structs complaint text into JSON, pandas handles all aggregation, and the dashboard surfaces case-level evidence
-              without turning the product into a chatbot.
+              Interactive dashboard visualizing Nepal governance complaints — explore cases by province, corruption type, and severity.
             </p>
             <div className="status-line">{status}</div>
           </div>
